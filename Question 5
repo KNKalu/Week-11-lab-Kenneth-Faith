@@ -1,0 +1,128 @@
+estimate_arrival_rates <- function(sample_bike, window_start, window_end){
+
+  required <- c("start_station", "end_station", "start_time", "end_time")
+  
+  if(!all(requires %in% names(sample_bike))) {
+    stop("Missing required columns")
+  }
+  
+  window_start <- ymd_hms(window_start)
+  window_end <- ymd_hms(window_end)
+  days <- as.numeric(difftime(window_end, window_start, units = "days"))
+  
+  if(is.na(days) || days <= 0 || days != floor(days)||
+     hour(window_start) != 0 || hour(window_end) != 0 ||
+     minute(window_start) != 0 || minute(window_end) != 0 ||
+     second(window_start) != 0 || second(window_end) != 0 || {
+       stop("window must contain complete days")
+     }
+     if(anyNA(sample_bike[, required])){
+    stop("Missing trip data")
+  }
+  
+  sample_bike <- sample_bike %>%
+    mutate(start_time <- ymd_hms(start_time),
+           end_time <- ymd_hms(end_time),
+  
+  
+  if (anyNA(sample_bike$start_time) ||
+      anyNA(sample_bike$end_time) ||
+      any(sample_bike$end_time < sample_bike$start_time)){
+    stop("invalid trip timesteps")
+  }
+    
+  
+  origin <- sample_bike %>%
+    mutate(station = as.character(start_station),
+           time = start_time,
+           inventory_change = -1,
+           event_type = "C"),
+
+  destination <- sample_bike %>%
+    mutate(station = as.character(end_station),
+           time = end_time,
+           inventory_change = 1,
+           event_type = "R"),
+
+  
+  #combining the event table
+  trip_times <- bind_rows(origin, destination) %>%
+    filter(time >= window_start, time < window_end) %>%
+    arrange(station, time, desc(inventory_change)),
+  
+  head(trip_times),
+  
+  
+  #adding inventory metrics
+  
+  inventory_per_station <- trip_times %>%
+    group_by(station) %>%
+    mutate(cumulative_change = cumsum(inventory_change),
+           initial_inventory = max(0, -min(cumulative_change)),
+           inventory = cumsum(inventory_change))%>%
+    ungroup(),
+  
+  head(inventory_per_station),
+  
+  boundaries <- tibble(time = seq(window_start, window_end, by = "hour")),
+  stations <- unique(C(as.character(sample_bike$start_station),
+                      (as.character(sample_bike$end_station)))
+  ),
+  
+  inventory_timeline <- bind_rows(inventory_per_station) %>%
+    select(station, time, inventory_change),
+  crossing(stations, 
+           time = boundaries$time) %>%
+    mutate(inventory_change = 0)) %>%
+    arrange(station, time, desc(inventory_change)) %>%
+    group_by(station)%>%
+    mutate(
+      cumulative_change = cumsum(inventory_change),
+      initial_inventory = max(0, -min(cumulative_change)),
+      inventory = (initial_inventory + cumulative_change),
+      next_time = lead(time)) %>%
+    filter(is.na(next_time)) %>%
+    mutate(duration = as.numeric(difftime(next_time, time, units = "hours")),
+           available_time = if_else(inventory >0, duration, 0),
+           hour = hour(time)) %>%
+    ungroup()
+      
+    )
+  
+  availability_table <- inventory_timeline %>%
+    group_by(station, hour) %>%
+    summarize(availablity = sum(svailable_time) / days,
+              .groups = "drop") %>%
+    rename(origin = station)
+  
+  observed_trips <- sample_bike %>%
+    filter(start_time >= window_start,
+           start_time < window_end) %>%
+    mutate(origin = as.character(start_station),
+           destination = as.character(end_station),
+           hour = hour(start_time)) %>%
+    count(origin, destination, hour, name = "trips")
+  
+  station_pairs <- sample_bike %>%
+    filter(start_time >= window_start,
+           start_time < window_end) %>%
+    transmute(origin = as.character(start_station),
+              destination = as.character(end_station)) %>%
+    distinct()
+    
+  results <- station_pairs %>%
+    crossing(hour = 0:23) %>%
+    left_join(observed_trips,
+              by = c("origin", "destination", "hour")) %>%
+    left_join(availability_table, 
+              by = c("origin", "hour")) %>%
+    mutate(trips = replace_na(trips, 0L),
+           observed_rate = trips/days,
+           rate = if_else(!is.na(availability) & availability >0,
+                          observed_rate / availability),
+           NA_real_) %>%
+    select(origin, destination, hour, observed_rate, availability, rate) %>%
+    arrange(origin, destination, hour)
+  
+  return(results) }
+  
