@@ -1,3 +1,6 @@
+window_start <- ymd_hms(window_start)
+  window_end <- ymd_hms(window_end)
+  days <- as.numeric(difftime(window_end, window_start, units = "days"))
 
 origin <- sample_bike %>%
   mutate(station = as.character(start_station),
