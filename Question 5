@@ -8,7 +8,6 @@ mutate(
     select(station, time, inventory_change, event_type)
 
 
-  # Create return events
   destination <- sample_bike %>%
     mutate(
 
@@ -19,13 +18,11 @@ mutate(
     ) %>%
     select(station, time, inventory_change, event_type)
 
-  # Combine events
 
   trip_times <- bind_rows(origin, destination) %>%
     filter(time >= window_start, time < window_end) %>%
     arrange(station, time, desc(inventory_change))
 
-  # Calculate inventory for each station
 
   inventory_per_station <- trip_times %>%
     group_by(station) %>%
@@ -36,7 +33,6 @@ mutate(
     ) %>%
     ungroup()
 
-  # Create hourly boundaries
   hours <- seq(window_start, window_end, by = "hour")
 
 
@@ -51,7 +47,6 @@ mutate(
     inventory_change = 0
   )
 
-  # Calculate time between inventory changes
 
   inventory_timeline <- bind_rows(
     inventory_per_station %>%
@@ -77,7 +72,6 @@ mutate(
     ) %>%
     ungroup()
 
-  # Calculate fraction of time bikes were available
 
   availability_table <- inventory_timeline %>%
     group_by(station, hour) %>%
@@ -87,7 +81,6 @@ mutate(
     ) %>%
     rename(origin = station)
 
-  # Count observed trips
 
   observed_trips <- sample_bike %>%
     filter(
@@ -101,7 +94,6 @@ mutate(
     ) %>%
     count(origin, destination, hour, name = "trips")
 
-  # Get unique origin-destination pairs
 
   station_pairs <- sample_bike %>%
     filter(
@@ -114,12 +106,10 @@ mutate(
     ) %>%
     distinct()
 
-  # Create all hours for each station pair
   station_hours <- station_pairs %>%
     slice(rep(seq_len(n()), each = 24)) %>%
     mutate(hour = rep(0:23, times = nrow(station_pairs)))
 
-  # Calculate arrival rates
   results <- station_hours %>%
 
     left_join(
