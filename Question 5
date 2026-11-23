@@ -1,47 +1,71 @@
-window_start <- ymd_hms(window_start)
+#' @description
+#' Function generating station inventories and bike availability
+#' based on start & end-time pairs in the raw_bike data frame
+#' @param data data frame, consisting of start_station,
+#' end_station, start_time, end_time
+#' @param window_start character, a ymd_hms time in character quotes
+#' @param window_end character, a ymd_hms time in character quotes
+
+estimate_arrival_rates <- function(data, window_start, window_end){
+  window_start <- ymd_hms(window_start)
   window_end <- ymd_hms(window_end)
   days <- as.numeric(difftime(window_end, window_start, units = "days"))
-
-origin <- sample_bike %>%
-  mutate(station = as.character(start_station),
-         time = start_time,
-         inventory_change = -1,
-         event_type = "C") %>%
-  select(station, time, inventory_change, event_type)
-
-destination <- sample_bike %>%
-  mutate(station = as.character(end_station),
-         time = end_time,
-         inventory_change = 1,
-         event_type = "R") %>%
-  select(station, time, inventory_change, event_type)
-
-trip_times <- bind_rows(origin, destination) %>%
-  filter(time >= window_start, time < window_end) %>%
-  arrange(station, time, desc(inventory_change))
-
-inventory_per_station <- trip_times %>%
-  group_by(station) %>%
-  mutate(
-    cumulative_change = cumsum(inventory_change),
-    initial_inventory = max(0, -min(cumulative_change)),
-    inventory = initial_inventory + cumulative_change
-  ) %>%
-  ungroup()
-
-availability_station <- inventory_per_station %>%
-arrange(station, time) %>%
-  group_by(station) %>%
-  mutate(
-    duration = as.numeric(difftime(next_time, 
-                                   time, 
-                                   units = "hours")),
-    unavailable_time = if_else(inventory == 0, 
-                               duration, 0),
-    next_time = lead(time)) %>%
-  summarize(total_unavailable = sum(
-    unavailable_time, na.rm = TRUE), 
-    total_time = as.numeric(difftime(
-      window_end, window_start, units = "hours" )), 
-    availability = 1 - total_unavailable / total_time) %>%
-  ungroup()
+  
+  origin <- sample_bike %>%
+    mutate(station = as.character(start_station),
+           time = start_time,
+           inventory_change = -1,
+           event_type = "C") %>%
+    select(station, time, inventory_change, event_type)
+  
+  destination <- sample_bike %>%
+    mutate(station = as.character(end_station),
+           time = end_time,
+           inventory_change = 1,
+           event_type = "R") %>%
+    select(station, time, inventory_change, event_type)
+  
+  trip_times <- bind_rows(origin, destination) %>%
+    filter(time >= window_start, time < window_end) %>%
+    arrange(station, time, desc(inventory_change))
+  
+  inventory_per_station <- trip_times %>%
+    group_by(station) %>%
+    mutate(
+      cumulative_change = cumsum(inventory_change),
+      initial_inventory = max(0, -min(cumulative_change)),
+      inventory = initial_inventory + cumulative_change
+    ) %>%
+    ungroup()
+  
+  availability_station <- inventory_per_station %>%
+    arrange(station, time) %>%
+    group_by(station) %>%
+    mutate(
+      next_time = lead(time),
+      duration = as.numeric(difftime(next_time, 
+                                     time, 
+                                     units = "hours")),
+      unavailable_time = if_else(inventory == 0, 
+                                 duration, 0)
+    ) |> 
+    summarize(total_unavailable = sum(
+      unavailable_time, na.rm = TRUE), 
+      total_time = as.numeric(difftime(
+        window_end, window_start, units = "hours" )), 
+      availability = 1 - total_unavailable / total_time) %>%
+    ungroup()
+  
+  #* Building data frame columns column by column
+  #* Return the finished data frame as the function output
+  
+  finished_data_frame <- data.frame(origin = origin#,
+                                    #destination = destination,
+                                   # inventory_per_station = inventory_per_station,
+                                   # availability_station = availability_station
+                                    )
+  
+  
+  
+  return(finished_data_frame)
+}
