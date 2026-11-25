@@ -1,71 +1,139 @@
-#' @description
-#' Function generating station inventories and bike availability
-#' based on start & end-time pairs in the raw_bike data frame
-#' @param data data frame, consisting of start_station,
-#' end_station, start_time, end_time
-#' @param window_start character, a ymd_hms time in character quotes
-#' @param window_end character, a ymd_hms time in character quotes
 
-estimate_arrival_rates <- function(data, window_start, window_end){
-  window_start <- ymd_hms(window_start)
-  window_end <- ymd_hms(window_end)
-  days <- as.numeric(difftime(window_end, window_start, units = "days"))
+#'  
+#' Estimating hourly bike request/arrival rates
+#'  
+#' @description simulates the probability of winning a singular 
+#' betting game round 
+#'   
+#' @param bike_df data frame (start station, end station, start time, end time)
+#' @param bet_size window_start observation window start
+#' @param win_prob window_end observation window end
+#' 
+#' 
+#' @return data frame with origin, destination, hour, observed rate, 
+#' availability, rate
+#' 
+
+bike_df <- bike_df %>%
+  mutate(start_time = as.POSIXct(start_time, 
+                                 format = "%Y-%m-%d %H:%M:%S"), 
+         end_time = as.POSIXct(end_time, 
+                               format = "%Y-%m-%d %H:%M:%S"))
+
+window_start <- min(bike_df$start_time)
+window_end <- max(bike_df$end_time)
+
+estimate_arrival_rates <- function(bike_df, window_start, window_end) {
+
+
+days <- as.numeric(difftime(window_end, window_start, 
+                            units = "days"))
+
+origin <- bike_df %>%
+  mutate(station = as.character(start_station),
+         time = start_time,
+         inventory_change = -1,
+         event_type = "C") %>%
+  select(station, time, inventory_change, event_type)
+
+destination <- bike_df %>%
+  mutate(station = as.character(end_station),
+         time = end_time,
+         inventory_change = 1,
+         event_type = "R") %>%
+  select(station, time, inventory_change, event_type)
+
+trip_times <- bind_rows(origin, destination) %>%
+  filter(time >= window_start, time < window_end) %>%
+  arrange(station, time, desc(inventory_change))
+
+
+
+hours <- seq(window_start, window_end, by = "hour")
+stations <- unique(c(
+  as.character(bike_df$start_station),
+  as.character(bike_df$end_station)
+))
+
+station_boundaries <- data.frame(
+  station = rep(stations, each = length(hours)),
+  time = rep(hours, times = length(stations)),
+  inventory_change = 0
+)
+
+inventory_timeline <- bind_rows(trip_times, station_boundaries) %>%
+  select(station, time, inventory_change) %>%
+  arrange(station, time, desc(inventory_change)) %>%
+  group_by(station) %>%
+  mutate(
+    cumulative_change = cumsum(inventory_change),
+    initial_inventory = max(0, - min(cumulative_change), na.rm = TRUE),
+    inventory = initial_inventory + cumulative_change,
+    next_time = lead(time)) %>%
+  filter(!is.na(next_time)) %>%
+  mutate(
+    duration = as.numeric(difftime(next_time, time,
+                                   units = "hours"))) %>%
+  ungroup()
   
-  origin <- sample_bike %>%
-    mutate(station = as.character(start_station),
-           time = start_time,
-           inventory_change = -1,
-           event_type = "C") %>%
-    select(station, time, inventory_change, event_type)
-  
-  destination <- sample_bike %>%
-    mutate(station = as.character(end_station),
-           time = end_time,
-           inventory_change = 1,
-           event_type = "R") %>%
-    select(station, time, inventory_change, event_type)
-  
-  trip_times <- bind_rows(origin, destination) %>%
-    filter(time >= window_start, time < window_end) %>%
-    arrange(station, time, desc(inventory_change))
-  
-  inventory_per_station <- trip_times %>%
-    group_by(station) %>%
-    mutate(
-      cumulative_change = cumsum(inventory_change),
-      initial_inventory = max(0, -min(cumulative_change)),
-      inventory = initial_inventory + cumulative_change
-    ) %>%
-    ungroup()
-  
-  availability_station <- inventory_per_station %>%
-    arrange(station, time) %>%
-    group_by(station) %>%
-    mutate(
-      next_time = lead(time),
-      duration = as.numeric(difftime(next_time, 
-                                     time, 
-                                     units = "hours")),
-      unavailable_time = if_else(inventory == 0, 
-                                 duration, 0)
-    ) |> 
-    summarize(total_unavailable = sum(
-      unavailable_time, na.rm = TRUE), 
-      total_time = as.numeric(difftime(
-        window_end, window_start, units = "hours" )), 
-      availability = 1 - total_unavailable / total_time) %>%
-    ungroup()
-  
-  #* Building data frame columns column by column
-  #* Return the finished data frame as the function output
-  
-  finished_data_frame <- data.frame(origin = origin#,
-                                    #destination = destination,
-                                   # inventory_per_station = inventory_per_station,
-                                   # availability_station = availability_station
-                                    )
-  
-  
-  
-  return(finished_data_frame)
+
+availability_station <- inventory_timeline %>%
+  arrange(station, time) %>%
+  group_by(station) %>%
+  mutate(
+    next_time = lead(time),
+    duration = as.numeric(difftime(next_time, 
+                                   time)),
+    unavailable_time = if_else(inventory == 0, 
+                               duration, 0)) %>%
+  summarize(total_unavailable = sum(
+    unavailable_time, na.rm = TRUE), 
+    total_time = as.numeric(difftime(
+      window_end, window_start)), 
+    availability = 1 - total_unavailable / total_time) %>%
+  ungroup() 
+
+observed_trips <- bike_df %>%
+  filter(start_time >= window_start,
+         start_time < window_end) %>%
+  mutate(origin = as.character(start_station),
+         destination = as.character(end_station)) %>%
+  count(origin, destination, name = "trips")
+
+station_pairs <- bike_df %>%
+  filter(start_time >= window_start,
+         start_time < window_end) %>%
+  transmute(origin = as.character(start_station),
+         destination = as.character(end_station)) %>%
+  distinct()
+
+station_hours <- station_pairs %>%
+  slice(rep(1:nrow(station_pairs), each = 24)) %>%
+  mutate(hour = rep(0:23, times = nrow(station_pairs)))
+
+arrival_rates_df <- station_hours %>%
+  left_join(observed_trips,
+            by = c("origin", "destination")) %>%
+  left_join(availability_station,
+            by = c("origin" = "station")) %>%
+  mutate(trips = replace_na(trips, 0L),
+         observed_rate = trips/days,
+         rate = if_else(!is.na(availability) & availability > 0,
+                        observed_rate / availability, 
+                        NA)) %>%
+  select(origin,
+         destination,
+         hour,
+         observed_rate,
+         availability,
+         rate) %>%
+  arrange(origin, destination, hour)
+
+return(arrival_rates_df)
+
 }
+
+arrival_rates_df <- estimate_arrival_rates(
+    bike_df, window_start, window_end)
+
+head(arrival_rates_df)
